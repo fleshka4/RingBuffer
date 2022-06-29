@@ -1,0 +1,5 @@
+/.git
+/.idea
+*.txt
+.clang-format
+/cmake-build-debug
