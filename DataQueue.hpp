@@ -3,33 +3,33 @@
 
 #include <queue>
 
-class RingBuffer {
+class DataQueue {
 public:
-    using value_type = unsigned int;
+    using value_type = std::pair<unsigned int*, unsigned int>;
 
-    RingBuffer() = default;
+    DataQueue() = default;
 
-    RingBuffer(const RingBuffer&) = default;
+    DataQueue(const DataQueue&) = default;
 
-    RingBuffer(RingBuffer&&) noexcept = default;
+    DataQueue(DataQueue&&) noexcept = default;
 
-    RingBuffer& operator=(const RingBuffer& rhs);
+    DataQueue& operator=(const DataQueue& rhs);
 
-    RingBuffer& operator=(RingBuffer&& rhs) noexcept;
+    DataQueue& operator=(DataQueue&& rhs) noexcept;
 
     [[nodiscard]] value_type front() const noexcept;
 
     [[nodiscard]] value_type back() const noexcept;
 
-    void push(value_type);
+    void push(const value_type&);
 
-    value_type pop();
+    value_type& pop();
 
     [[nodiscard]] bool empty() const noexcept;
 
     [[nodiscard]] bool full() const noexcept;
 
-    [[nodiscard]] value_type capacity() const noexcept;
+    [[nodiscard]] unsigned int capacity() const noexcept;
 
     [[nodiscard]] size_t size() const noexcept;
 private:
