@@ -4,78 +4,79 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
-#include <stdexcept>
+#include <sstream>
 #include <thread>
 
-#include <boost/circular_buffer.hpp>
-
+#include "CircularBuffer.hpp"
 #include "DataQueue.hpp"
 
 namespace {
-    constexpr auto bytesInMegabytes = 1024 * 1024;
-
-    constexpr inline unsigned int countOfDigits(unsigned int n) {
-        if (n == 0)
-            return 1;
-        unsigned int count = 1;
-        while (n /= 10)
-            ++count;
-        return count;
-    }
-
-    inline void fill(boost::circular_buffer<DataQueue::value_type> &buffer) {
-        static unsigned int counter = 0;
-        unsigned int curSize = 0, i = 0;
-        unsigned int temp = counter;
-        for (; curSize < bytesInMegabytes - countOfDigits(counter) - 1; ++i) {
-            curSize += countOfDigits(counter++) + 1;
-        }
-
-        auto *ptr = static_cast<unsigned int *>(::malloc(i * sizeof(unsigned int)));
-        for (unsigned int j = 0; j < i; ++j) {
-            ptr[j] = temp++;
-        }
-        buffer.push_front({ptr, i});
-    }
-
     inline void writeToFile(std::ofstream &file, DataQueue::value_type &pair, std::ofstream &speedInfo) {
         const auto start = std::chrono::steady_clock::now();
-        for (unsigned int i = 0; i < pair.second; ++i) {
-            file << pair.first[i] << '\n';
-        }
+        file.write(reinterpret_cast<const char*>(pair.first), pair.second);
         const auto time = static_cast<std::chrono::duration<double>>
             ((std::chrono::steady_clock::now() - start)).count();
-        speedInfo << pair.second / time << "(s.u./s)\n";
-        ::free(pair.first);
+        speedInfo << pair.second / time / CircularBuffer::bytesInMegabyte << "(MB/s)\n";
     }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     std::ios::sync_with_stdio(false);
-    const char* filename = "../output.txt";
-    std::ofstream output{filename};
+    int count;
+    if (argc < 2) {
+        count = -1;
+    } else {
+        std::istringstream stream(argv[argc - 1]);
+        stream >> count;
+        if (stream.fail()) {
+            std::cerr << "Error with parsing number\n";
+            return 1;
+        }
+        if (count == 0) {
+            std::cerr << "Number of writing must be greater than 0\n";
+            return 1;
+        }
+    }
+
+    const char* filename = "../output.bin";
+    std::ofstream output{filename, std::ios_base::binary};
     const std::filesystem::path ex = filename;
     DataQueue dataQueue;
-    boost::circular_buffer<DataQueue::value_type> buffer(dataQueue.capacity());
+    CircularBuffer circularBuffer(dataQueue.capacity());
     constexpr auto limit = 2048;
     std::mutex mutex;
     std::condition_variable not_full, not_empty;
+    const auto start = std::chrono::steady_clock::now();
 
     std::thread producer{[&]{
-        while (file_size(ex) / bytesInMegabytes + dataQueue.size() < limit) {
-            fill(buffer);
-            if (dataQueue.full()) {
-                std::unique_lock<std::mutex> uniqueLock{mutex};
-                not_full.wait(uniqueLock, [&]{ return !dataQueue.full(); });
+        bool unlimited = false;
+        if (count == -1) {
+            count = 1;
+            unlimited = true;
+        }
+        while (file_size(ex) / CircularBuffer::bytesInMegabyte + dataQueue.size() < limit) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; (i < count) && (static_cast<std::chrono::duration<double>>
+                ((std::chrono::steady_clock::now() - start)).count() < 1); ++i) {
+                circularBuffer.fill();
+                if (dataQueue.full()) {
+                    std::unique_lock<std::mutex> uniqueLock{mutex};
+                    not_full.wait(uniqueLock, [&] { return !dataQueue.full(); });
+                }
+                dataQueue.push({circularBuffer.back().get(), CircularBuffer::bytesInMegabyte});
+                not_empty.notify_one();
             }
-            dataQueue.push(buffer.front());
-            not_empty.notify_one();
+            const auto end = std::chrono::steady_clock::now();
+            if (auto temp = static_cast<std::chrono::duration<double>>(end - start).count(); !unlimited &&
+                temp < 1) {
+                std::this_thread::sleep_for((std::chrono::milliseconds(1000 - long(temp))));
+            }
         }
     }};
 
     std::thread consumer{[&]{
         std::ofstream speedInfo{"../speed_info.txt"};
-        while (file_size(ex) / bytesInMegabytes < limit) {
+        while (file_size(ex) / CircularBuffer::bytesInMegabyte < limit) {
             if (dataQueue.empty()) {
                 std::unique_lock<std::mutex> uniqueLock{mutex};
                 not_empty.wait(uniqueLock, [&]{ return !dataQueue.empty(); });
